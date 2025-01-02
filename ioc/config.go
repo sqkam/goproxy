@@ -2,15 +2,11 @@ package ioc
 
 import (
 	"github.com/spf13/viper"
+	"github.com/sqkam/goproxy/config"
 )
 
-type ProxyConfig struct {
-	Listen int64
-	Target string
-}
-
-func InitConfig() *ProxyConfig {
-	var conf ProxyConfig
+func InitConfig() *config.ProxyConfig {
+	var conf config.ProxyConfig
 	v := viper.New()
 	v.SetConfigFile("./config.yaml")
 	if err := v.ReadInConfig(); err != nil {

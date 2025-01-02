@@ -5,6 +5,7 @@ go 1.23.2
 require (
 	github.com/google/wire v0.6.0
 	github.com/spf13/viper v1.19.0
+	golang.org/x/sync v0.6.0
 )
 
 require (
