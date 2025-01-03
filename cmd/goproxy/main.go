@@ -13,6 +13,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := InitProxyServer()
-	s.Run(ctx)
+	go func() {
+		s.Run(ctx)
+	}()
 	<-quit
 }

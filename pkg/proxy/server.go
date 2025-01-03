@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
-	"sync"
+	"log"
+	"net/http"
 	"time"
 
 	"github.com/sqkam/goproxy/config"
-
-	"golang.org/x/sync/errgroup"
+	"github.com/sqkam/goproxy/pkg/readerx"
 )
 
 type server struct {
@@ -18,70 +17,51 @@ type server struct {
 	target string
 }
 
-var onceClose sync.Once
+const bufSize = 512
 
-func (s *server) Run(ctx context.Context) {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.listen))
-	if err != nil {
-		panic("connection error:" + err.Error())
-	}
-	defer func() {
-		onceClose.Do(func() {
-			listener.Close()
-		})
-	}()
-
-	fmt.Printf(fmt.Sprintf("Starting tcp gateway server on port %d to %s ...\n", s.listen, s.target))
-	go func() {
-		// context超时 取消代理
-		<-ctx.Done()
-		onceClose.Do(func() {
-			listener.Close()
-		})
-	}()
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Println("Accept Error:", err)
-			continue
+func (s *server) copyHeader(r, req *http.Request) {
+	for key, values := range r.Header {
+		for _, value := range values {
+			req.Header.Add(key, value)
 		}
-
-		go s.handleTCP(conn)
 	}
 }
 
-const bufSize = 512
+func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*3)
+	defer cancel()
 
-func (s *server) handleTCP(src net.Conn) {
-	if src, ok := src.(*net.TCPConn); ok {
-		_ = src.SetKeepAlive(true)
-		_ = src.SetKeepAlivePeriod(5 * time.Second)
-	}
-
-	dst, err := net.DialTimeout("tcp", s.target, time.Second*10)
+	req, err := http.NewRequestWithContext(ctx, r.Method, s.target, r.Body)
 	if err != nil {
+		log.Printf("http.NewRequestWithContext error: %v\n", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	s.copyHeader(r, req)
 
-	defer dst.Close()
-
-	var eg errgroup.Group
-	eg.Go(func() error {
-		cpyBuf := make([]byte, bufSize)
-		defer dst.Close()
-		_, err := io.CopyBuffer(src, dst, cpyBuf)
-		return err
-	})
-	eg.Go(func() error {
-		cpyBuf := make([]byte, bufSize)
-		defer src.Close()
-		_, err := io.CopyBuffer(dst, src, cpyBuf)
-		return err
-	})
-	err = eg.Wait()
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Printf("handleTCP error %v\n", err.Error())
+		log.Printf("http.DefaultClient.Do error: %v\n", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, bufSize)
+	_, err = io.CopyBuffer(w, readerx.NewLoggerReader(resp.Body), buf)
+	if err != nil {
+		log.Printf("io.CopyBuffer error: %v\n", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+}
+
+func (s *server) Run(ctx context.Context) {
+	log.Printf(fmt.Sprintf("Starting http gateway server on port %d...", s.listen))
+
+	err := http.ListenAndServe(fmt.Sprintf(":%d", s.listen), s)
+	if err != nil {
+		panic(err)
 	}
 }
 
