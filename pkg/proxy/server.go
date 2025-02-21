@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"time"
 
@@ -47,14 +46,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 复制请求头
 	s.copyHeader(req.Header, r.Header)
-
-	// 设置代理相关的头部
-	req.Host = r.Host
-	if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		req.Header.Set("X-Forwarded-For", clientIP)
-	}
-	req.Header.Set("X-Forwarded-Host", r.Host)
-	req.Header.Set("X-Forwarded-Proto", "http")
+	//
+	//// 设置代理相关的头部
+	//req.Host = r.Host
+	//if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+	//	req.Header.Set("X-Forwarded-For", clientIP)
+	//}
+	//req.Header.Set("X-Forwarded-Host", r.Host)
+	//req.Header.Set("X-Forwarded-Proto", "http")
 
 	// 发送代理请求
 	resp, err := http.DefaultClient.Do(req)
