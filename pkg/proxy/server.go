@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -17,54 +18,90 @@ type server struct {
 	target string
 }
 
-const bufSize = 512
+const (
+	defaultTimeout = 60 * time.Second
+	bufSize        = 32 * 1024 // 增加buffer大小到32KB以提升性能
+)
 
-func (s *server) copyHeader(r, req *http.Request) {
-	for key, values := range r.Header {
+func (s *server) copyHeader(dst, src http.Header) {
+	for key, values := range src {
 		for _, value := range values {
-			req.Header.Add(key, value)
+			dst.Add(key, value)
 		}
 	}
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*60)
+	// 使用父上下文创建超时上下文
+	ctx, cancel := context.WithTimeout(r.Context(), defaultTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, r.Method, s.target, r.Body)
+	// 构建代理请求
+	targetURL := s.target + r.URL.String()
+	req, err := http.NewRequestWithContext(ctx, r.Method, targetURL, r.Body)
 	if err != nil {
-		log.Printf("http.NewRequestWithContext error: %v\n", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("http.NewRequestWithContext error: %v\n", err)
+		http.Error(w, "Failed to create proxy request", http.StatusInternalServerError)
 		return
 	}
-	s.copyHeader(r, req)
-	req.RequestURI = r.RequestURI
-	req.RemoteAddr = r.RemoteAddr
-	req.ContentLength = r.ContentLength
-	req.URL.Path = r.URL.Path
+
+	// 复制请求头
+	s.copyHeader(req.Header, r.Header)
+
+	// 设置代理相关的头部
+	req.Host = r.Host
+	if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		req.Header.Set("X-Forwarded-For", clientIP)
+	}
+	req.Header.Set("X-Forwarded-Host", r.Host)
+	req.Header.Set("X-Forwarded-Proto", "http")
+
+	// 发送代理请求
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("http.DefaultClient.Do error: %v\n", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("http.DefaultClient.Do error: %v\n", err)
+		http.Error(w, "Failed to proxy request", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
+	// 复制响应头
+	s.copyHeader(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+
+	// 复制响应体
 	buf := make([]byte, bufSize)
 	_, err = io.CopyBuffer(w, readerx.NewLoggerReader(resp.Body), buf)
 	if err != nil {
-		log.Printf("io.CopyBuffer error: %v\n", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("io.CopyBuffer error: %v\n", err)
+		// 此时已经发送了响应头，无法再修改状态码
 		return
 	}
 }
 
 func (s *server) Run(ctx context.Context) {
-	log.Printf(fmt.Sprintf("Starting http gateway server on port %d...", s.listen))
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%d", s.listen),
+		Handler: s,
+	}
 
-	err := http.ListenAndServe(fmt.Sprintf(":%d", s.listen), s)
-	if err != nil {
-		panic(err)
+	// 在goroutine中启动服务器
+	go func() {
+		log.Printf("Starting http gateway server on port %d...", s.listen)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+
+	// 监听context取消
+	<-ctx.Done()
+
+	// 优雅关闭
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server Shutdown error: %v", err)
 	}
 }
 
