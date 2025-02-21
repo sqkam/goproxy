@@ -19,7 +19,7 @@ type server struct {
 
 const (
 	defaultTimeout = 60 * time.Second
-	bufSize        = 32 * 1024 // 增加buffer大小到32KB以提升性能
+	bufSize        = 8 * 1024 // 增加buffer大小到32KB以提升性能
 )
 
 func (s *server) copyHeader(dst, src http.Header) {
