@@ -28,7 +28,7 @@ func (s *server) copyHeader(r, req *http.Request) {
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*60)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, r.Method, s.target, r.Body)
@@ -38,7 +38,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.copyHeader(r, req)
-
+	req.RequestURI = r.RequestURI
+	req.RemoteAddr = r.RemoteAddr
+	req.ContentLength = r.ContentLength
+	req.URL.Path = r.URL.Path
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("http.DefaultClient.Do error: %v\n", err.Error())
